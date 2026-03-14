@@ -1,0 +1,31 @@
+# Clank - Configuración por defecto
+# Copia este archivo a config.yaml y ajusta los valores
+
+# Modelo LLM a usar (cualquier modelo soportado por LiteLLM)
+# Ejemplos: gpt-4o, claude-sonnet-4-20250514, ollama/llama3, groq/llama3-70b
+model: "gpt-4o-mini"
+
+# Prompt de sistema del agente
+system_prompt: |
+  Eres Clank, un asistente inteligente que puede ejecutar código y comandos
+  de forma segura en un entorno aislado. Responde de forma clara y concisa.
+  Cuando el usuario pida ejecutar código, usa las herramientas disponibles.
+
+# Configuración de Docker para ejecución aislada
+sandbox:
+  enabled: true
+  image: "clank-sandbox:latest"
+  timeout: 30  # segundos
+  memory_limit: "256m"
+  cpu_limit: 0.5
+  network: false  # sin acceso a red por defecto
+
+# Interfaz web (Chainlit)
+web:
+  host: "0.0.0.0"
+  port: 8000
+
+# Parámetros del modelo
+generation:
+  temperature: 0.7
+  max_tokens: 4096

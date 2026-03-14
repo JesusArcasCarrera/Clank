@@ -1,0 +1,18 @@
+services:
+  clank-web:
+    build: .
+    command: ["--web"]
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./workspace:/app/workspace
+    depends_on:
+      - sandbox-builder
+
+  # Construye la imagen de sandbox al inicio
+  sandbox-builder:
+    build: ./sandbox
+    image: clank-sandbox:latest
+    entrypoint: ["echo", "sandbox image built"]
