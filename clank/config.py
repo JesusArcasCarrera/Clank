@@ -28,12 +28,20 @@ class WebConfig(BaseModel):
     port: int = 8000
 
 
+class MemoryConfig(BaseModel):
+    embedding_model: str = "google/embeddinggemma-300m"
+    collection_name: str = "clank_memory"
+    heartbeat_interval: int = 30  # minutos
+
+
 class ClankConfig(BaseModel):
     model: str = "gpt-4o-mini"
     system_prompt: str = "Eres Clank, un asistente inteligente."
+    workspace_dir: str = "workspace"
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     generation: GenerationConfig = Field(default_factory=GenerationConfig)
     web: WebConfig = Field(default_factory=WebConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
 
 
 def load_config(path: Path | None = None) -> ClankConfig:

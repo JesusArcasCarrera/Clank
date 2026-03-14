@@ -29,10 +29,13 @@
 | | Característica | Descripción |
 |---|---|---|
 | 🔀 | **Multi-proveedor** | 100+ modelos vía LiteLLM — OpenAI, Anthropic, Groq, Ollama, Together, etc. |
+| 🧠 | **Memoria dual** | Corto plazo (Markdown) + largo plazo (embeddings con EmbeddingGemma + ChromaDB) |
+| 💓 | **Heartbeat** | Tareas recurrentes que el agente revisa periódicamente |
+| 👤 | **Identidad persistente** | SOUL.md, IDENTITY.md, USER.md — el agente "se lee a sí mismo" al arrancar |
 | 💻 | **CLI interactivo** | Terminal con Rich, streaming en tiempo real y autocompletado |
 | 🌐 | **Interfaz web** | Chat web con Chainlit, streaming y gestión de sesiones |
 | 🐳 | **Sandbox Docker** | Código y shell se ejecutan aislados (sin red, con límites de CPU/RAM) |
-| 🔧 | **Herramientas** | Ejecución de Python, comandos shell, lectura/escritura de archivos |
+| 🔧 | **Herramientas** | Ejecución de Python, comandos shell, lectura/escritura de archivos, memoria |
 | ⚙️ | **Configurable** | YAML + variables de entorno, fácil de personalizar |
 
 ## 🚀 Inicio rápido
@@ -105,6 +108,49 @@ docker compose up
 docker build -t clank-sandbox:latest ./sandbox
 ```
 
+## 🧠 Sistema de memoria
+
+Clank tiene un sistema de memoria dual inspirado en OpenClaw:
+
+### Corto plazo — Archivos Markdown
+
+```
+workspace/
+├── identity/
+│   ├── SOUL.md          # 🧠 Personalidad, valores, vibe — el agente "se lee a sí mismo"
+│   ├── IDENTITY.md      # 🤖 Nombre, tipo, emoji — ancla de identidad
+│   ├── AGENTS.md        # 📋 Reglas de operación, permisos, estilo
+│   ├── USER.md          # 👤 Info sobre el usuario (se rellena en bootstrap)
+│   ├── TOOLS.md         # 🔧 Config del entorno (SSH, cámaras, servicios)
+│   └── BOOTSTRAP.md     # 🚀 Guía de primera conversación (se borra después)
+├── HEARTBEAT.md         # 💓 Tareas recurrentes (se revisa cada 30 min)
+├── MEMORY.md            # 🧠 Memoria curada a largo plazo
+└── memory/
+    ├── 2026-03-14.md    # 📝 Diario de hoy (append-only)
+    └── 2026-03-13.md    # 📝 Diario de ayer
+```
+
+**Al arrancar**, el agente carga: `IDENTITY → SOUL → AGENTS → USER → TOOLS → Diarios recientes → MEMORY`
+
+**Primera vez**: detecta USER.md sin rellenar y entra en modo **bootstrap** (se presenta, conoce al usuario, documenta).
+
+### Largo plazo — Embeddings
+
+- **Modelo**: [EmbeddingGemma](https://ai.google.dev/gemma/docs/embeddinggemma) (308M params, ~200MB RAM, 768 dims)
+- **Vector store**: ChromaDB (local, persistente)
+- Los diarios y memorias curadas se indexan automáticamente
+- Búsqueda semántica: "¿qué me dijo el usuario sobre su proyecto?" → resultados por similitud
+- **Opcional**: si no instalas `sentence-transformers` y `chromadb`, funciona solo con MD
+
+### Herramientas de memoria del agente
+
+| Herramienta | Qué hace |
+|-------------|----------|
+| `remember` | Guarda un hecho en MEMORY.md + vector store |
+| `recall` | Búsqueda semántica en toda la memoria histórica |
+| `write_log` | Escribe en el diario del día |
+| `memory_status` | Muestra estado del sistema de memoria |
+
 ## ⚙️ Configuración
 
 Copia `configs/default.yaml` a `config.yaml` y ajusta:
@@ -112,7 +158,11 @@ Copia `configs/default.yaml` a `config.yaml` y ajusta:
 ```yaml
 model: "gpt-4o-mini"          # Cualquier modelo soportado por LiteLLM
 
-system_prompt: "Eres Clank, un asistente inteligente."
+workspace_dir: "workspace"     # Donde vive la identidad y memoria
+
+memory:
+  embedding_model: "google/embeddinggemma-300m"  # Modelo para largo plazo
+  heartbeat_interval: 30                         # Minutos entre heartbeats
 
 sandbox:
   enabled: true                # Ejecutar código en contenedores Docker
@@ -143,37 +193,41 @@ GROQ_API_KEY=gsk_...
 ## 🏗️ Arquitectura
 
 ```
-┌─────────────────────────────────────────────────┐
-│              Interfaces                         │
-│    ┌─────────────┐    ┌──────────────────┐      │
-│    │  CLI (Rich)  │    │  Web (Chainlit)  │      │
-│    └──────┬───────┘    └────────┬─────────┘      │
-└───────────┼─────────────────────┼────────────────┘
-            │                     │
-            ▼                     ▼
-┌─────────────────────────────────────────────────┐
-│           Agent (agent.py)                      │
-│  Conversación • Tool loop • Streaming           │
-└───────────────────────┬─────────────────────────┘
-                        │
-          ┌─────────────┼─────────────┐
-          ▼             ▼             ▼
-┌──────────────┐ ┌────────────┐ ┌──────────┐
-│  code_exec   │ │   shell    │ │filesystem│
-│  (Python)    │ │  (bash)    │ │ (R/W)    │
-└──────┬───────┘ └─────┬──────┘ └──────────┘
-       │               │
-       ▼               ▼
-┌─────────────────────────────────────────────────┐
-│         Sandbox Docker (sandbox.py)             │
-│  Aislado • Sin red • Límites CPU/RAM           │
-└─────────────────────────────────────────────────┘
-                        │
-                        ▼
-┌─────────────────────────────────────────────────┐
-│           LiteLLM (multi-proveedor)             │
-│  OpenAI • Anthropic • Ollama • Groq • 100+     │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│               Interfaces                            │
+│    ┌─────────────┐       ┌──────────────────┐       │
+│    │  CLI (Rich)  │       │  Web (Chainlit)  │       │
+│    └──────┬───────┘       └────────┬─────────┘       │
+└───────────┼────────────────────────┼─────────────────┘
+            │                        │
+            ▼                        ▼
+┌─────────────────────────────────────────────────────┐
+│            Agent (agent.py)                         │
+│   Conversación • Tool loop • Streaming              │
+└────────┬───────────────────────────┬────────────────┘
+         │                           │
+         ▼                           ▼
+┌─────────────────────┐   ┌──────────────────────────┐
+│   🔧 Herramientas   │   │   🧠 Sistema de Memoria  │
+│                     │   │                          │
+│  code_exec (Python) │   │  Corto plazo (Markdown)  │
+│  shell (bash)       │   │    SOUL · IDENTITY       │
+│  filesystem (R/W)   │   │    HEARTBEAT · MEMORY    │
+│  remember / recall  │   │    Diarios diarios       │
+│  write_log          │   │                          │
+└────────┬────────────┘   │  Largo plazo (Embeddings)│
+         │                │    EmbeddingGemma 300M   │
+         ▼                │    ChromaDB local        │
+┌─────────────────────┐   └──────────────────────────┘
+│  Sandbox Docker     │
+│  Aislado • Sin red  │
+└─────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────┐
+│            LiteLLM (multi-proveedor)                │
+│   OpenAI • Anthropic • Ollama • Groq • 100+        │
+└─────────────────────────────────────────────────────┘
 ```
 
 ### Estructura de archivos
@@ -185,13 +239,30 @@ Clank/
 │   ├── config.py             # Carga de configuración YAML + Pydantic
 │   ├── sandbox.py            # Ejecución Docker aislada con fallback local
 │   ├── cli.py                # Interfaz CLI con Rich + prompt_toolkit
+│   ├── memory/
+│   │   ├── __init__.py       # Exports del sistema de memoria
+│   │   ├── short_term.py     # Memoria MD (identidad, diarios, MEMORY.md)
+│   │   ├── long_term.py      # Embeddings (EmbeddingGemma + ChromaDB)
+│   │   └── manager.py        # Fachada unificada de memoria
 │   ├── tools/
 │   │   ├── __init__.py       # Registro de herramientas
 │   │   ├── code_exec.py      # Ejecutar código Python en sandbox
 │   │   ├── shell.py          # Ejecutar comandos shell en sandbox
-│   │   └── filesystem.py     # Leer/escribir/listar archivos
+│   │   ├── filesystem.py     # Leer/escribir/listar archivos
+│   │   └── memory.py         # remember, recall, write_log, memory_status
 │   └── interfaces/
 │       └── web.py            # Interfaz Chainlit
+├── workspace/
+│   ├── identity/
+│   │   ├── SOUL.md           # 🧠 Personalidad y valores
+│   │   ├── IDENTITY.md       # 🤖 Nombre, tipo, emoji
+│   │   ├── AGENTS.md         # 📋 Reglas de operación
+│   │   ├── USER.md           # 👤 Perfil del usuario
+│   │   ├── TOOLS.md          # 🔧 Config del entorno
+│   │   └── BOOTSTRAP.md      # 🚀 Setup inicial
+│   ├── HEARTBEAT.md          # 💓 Tareas recurrentes
+│   ├── MEMORY.md             # 🧠 Memoria curada
+│   └── memory/               # 📝 Diarios diarios (YYYY-MM-DD.md)
 ├── configs/
 │   └── default.yaml          # Configuración por defecto
 ├── sandbox/

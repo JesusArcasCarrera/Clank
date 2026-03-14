@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Generator
 
 import litellm
 
 from clank.config import ClankConfig
+from clank.memory import MemoryManager
 from clank.tools import TOOL_REGISTRY, Tool
+from clank.tools.memory import set_memory_manager
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -35,15 +41,35 @@ class Message:
 
 @dataclass
 class Agent:
-    """Agente conversacional con soporte de herramientas."""
+    """Agente conversacional con soporte de herramientas y memoria persistente."""
 
     config: ClankConfig
     history: list[Message] = field(default_factory=list)
     tools: dict[str, Tool] = field(default_factory=dict)
+    memory: MemoryManager = field(init=False)
 
     def __post_init__(self) -> None:
-        self.history.append(Message(role="system", content=self.config.system_prompt))
+        # Inicializar memoria
+        workspace = Path(self.config.workspace_dir)
+        self.memory = MemoryManager(
+            workspace=workspace,
+            embedding_model=self.config.memory.embedding_model,
+        )
+
+        # Construir system prompt enriquecido con contexto de memoria
+        boot_context = self.memory.boot_context()
+        system_prompt = self.config.system_prompt
+        if boot_context:
+            system_prompt = f"{system_prompt}\n\n---\n\n{boot_context}"
+
+        self.history.append(Message(role="system", content=system_prompt))
         self.tools = {name: tool_cls() for name, tool_cls in TOOL_REGISTRY.items()}
+
+        # Inyectar memory manager en las herramientas de memoria
+        set_memory_manager(self.memory)
+
+        if self.memory.needs_bootstrap():
+            logger.info("Primera ejecución detectada — modo bootstrap activo")
 
     def _tool_schemas(self) -> list[dict[str, Any]]:
         return [tool.schema() for tool in self.tools.values()]
@@ -161,5 +187,9 @@ class Agent:
         yield "\nSe alcanzó el límite de iteraciones de herramientas."
 
     def reset(self) -> None:
-        """Limpia el historial manteniendo el system prompt."""
-        self.history = [Message(role="system", content=self.config.system_prompt)]
+        """Limpia el historial manteniendo el system prompt + contexto de memoria."""
+        boot_context = self.memory.boot_context()
+        system_prompt = self.config.system_prompt
+        if boot_context:
+            system_prompt = f"{system_prompt}\n\n---\n\n{boot_context}"
+        self.history = [Message(role="system", content=system_prompt)]
